@@ -371,8 +371,151 @@ interaction_results_fe_3hm %>%
   kable_styling(latex_options = c("hold_position", "scale_down"))
 
 
+#-----Part 2.3: Third method as the second robustness check with 4 half months in "before the mass shooting"-----#
+filtered_reviews_between_2_50km_4hm <- filtered_reviews_between_2_50km %>%
+  filter(date >= as_datetime("2018-02-22"),
+         date <= as_datetime("2018-05-07"))
 
+# Separate the review dataset into half months
+filtered_reviews_between_2_50km_4hm <- filtered_reviews_between_2_50km_4hm %>%
+  mutate(review_half_months = case_when(
+    date >= as_datetime("2018-02-22") & date < as_datetime("2018-03-07") ~ "first half month",
+    date >= as_datetime("2018-03-07") & date < as_datetime("2018-03-22") ~ "second half month",
+    date >= as_datetime("2018-03-22") & date < as_datetime("2018-04-07") ~ "third half month",
+    date >= as_datetime("2018-04-07") & date < as_datetime("2018-04-22") ~ "fourth half month",
+    date >= as_datetime("2018-04-22") & date <= as_datetime("2018-05-07") ~ "fifth half month"
+  ))
 
+# Simplify the variables within the review dataset
+filtered_reviews_between_2_50km_4hm <- filtered_reviews_between_2_50km_4hm %>%
+  select(business_id, stars, text, date, review_half_months)
+write.csv(filtered_reviews_between_2_50km_4hm, "filtered_reviews_between_2_50km_4hm.csv", row.names = FALSE)
+
+# Add LIWC sentimental variables to the filtered reviews, processed by the LIWC-22 Analysis tool bought from https://www.liwc.app/buy
+LIWC_filtered_reviews_4hm <- read.csv("LIWC-22 Results - filtered_reviews_between_2_50k___ - LIWC Analysis_4hm.csv", stringsAsFactors = FALSE)
+
+# Separate the review dataset into before and after periods
+LIWC_filtered_reviews_4hm <- LIWC_filtered_reviews_4hm %>%
+  mutate(review_period = case_when(
+    review_half_months == "first half month" | review_half_months == "second half month" | review_half_months == "third half month" | review_half_months == "fourth half month" ~ "before",
+    review_half_months == "fifth half month" ~ "after"
+  ))
+
+# Keep only businesses with both before and after reviews
+eligible_ids_4hm <- LIWC_filtered_reviews_4hm %>%
+  group_by(business_id) %>%
+  filter(n_distinct(review_period) == 2) %>%
+  pull(business_id) %>%
+  unique()
+LIWC_filtered_reviews_4hm <- LIWC_filtered_reviews_4hm %>%
+  filter(business_id %in% eligible_ids_4hm)
+
+# Aggregate the sub-dimension LIWC variables into the main dimensions
+LIWC_filtered_reviews_4hm <- LIWC_filtered_reviews_4hm %>%
+  mutate(
+    States = need + want + acquire + lack + fulfill + fatigue,
+    Motive = reward + risk + curiosity + allure,
+    Timeorientation = time + focuspast + focuspresent + focusfuture
+  )
+
+# Add distance_km varaible to LIWC_filtered_reviews
+LIWC_filtered_reviews_4hm <- LIWC_filtered_reviews_4hm %>%
+  left_join(business_between_2_50km %>% select(business_id, distance_km),
+            by = "business_id")
+write.csv(LIWC_filtered_reviews_4hm, "LIWC_filtered_reviews_4hm.csv", row.names = FALSE)
+
+# Define LIWC variable names and calculate their means (Same as the first method)
+#liwc_vars <- c("WC", "Analytic", "Clout", "Authentic", "Tone", "AllPunc", "Drives", 
+#               "Cognition", "Affect", "Social", "Culture", "Lifestyle", "Physical", 
+#               "Perception", "States", "Motive", "Timeorientation", "stars")
+#liwc_means %>%
+#  arrange(desc(abs_diff)) %>%
+#  head(10)
+
+# Prepare for the aggregation step below (Same as the first method)
+#liwc_start_hm <- which(names(LIWC_filtered_reviews_hm) == "WC")
+#liwc_end_hm <- which(names(LIWC_filtered_reviews_hm) == "Timeorientation")
+#full_liwc_vars_hm <- names(LIWC_filtered_reviews_hm)[liwc_start_hm:liwc_end_hm]
+
+# Aggregate the review dataset so that each business only has one "before" review output and one "after" review output
+aggregated_LIWC_reviews_4hm <- LIWC_filtered_reviews_4hm %>%
+  group_by(business_id, review_period) %>%
+  summarise(
+    # average all the LIWC variables
+    across(all_of(full_liwc_vars_hm), mean, na.rm = TRUE),
+    # average the stars and add distance in km
+    across(stars, mean, na.rm = TRUE),
+    across(distance_km, mean, na.rm = TRUE),
+    # choose the "half month" that appears the most for each business_id
+    review_half_months = names(which.max(table(review_half_months))),
+    # Combine the "text" as one paragraph for the before and after of each business_id
+    combined_text = str_c(text, collapse = " "),
+    .groups = "drop"
+  )
+
+# Convert review_period into a dummy variable: after = 1, before = 0
+aggregated_LIWC_reviews_4hm <- aggregated_LIWC_reviews_4hm %>%
+  mutate(review_period_dummy = ifelse(review_period == "after", 1, 0))
+
+# Replace all NAN with 0
+aggregated_LIWC_reviews_4hm <- aggregated_LIWC_reviews_4hm %>%
+  mutate(across(everything(), ~ ifelse(is.nan(.), 0, .))) %>%  
+  mutate(across(everything(), ~ replace_na(., 0)))
+
+# Reverse the Distance Variable to Proximity
+aggregated_LIWC_reviews_4hm <- aggregated_LIWC_reviews_4hm %>%
+  mutate(proximity = max(distance_km, na.rm = TRUE) - distance_km)
+write.csv(aggregated_LIWC_reviews_4hm, "aggregated_LIWC_reviews_4hm.csv", row.names = FALSE)
+
+# Calculate before/after means and absolute difference
+liwc_means_4hm <- aggregated_LIWC_reviews_4hm %>%
+  group_by(review_period) %>%
+  summarise(across(all_of(liwc_vars), mean, na.rm = TRUE)) %>%
+  pivot_longer(-review_period, names_to = "LIWC_variable", values_to = "mean") %>%
+  pivot_wider(names_from = review_period, values_from = mean) %>%
+  mutate(abs_diff = abs(before - after)) %>%
+  arrange(desc(abs_diff))
+
+# Plot top 10 most changed variables
+liwc_means_4hm %>%
+  slice_max(abs_diff, n=10) %>%
+  pivot_longer(cols = c(before, after), names_to = "period", values_to = "mean") %>%
+  ggplot(aes(x = reorder(LIWC_variable, -mean), y = mean, fill = period)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(title = "Top 10 LIWC Variables by Absolute Mean Difference",
+       x = "LIWC Variable", y = "Mean Score") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+# Run the Fixed effect model
+models_fe_4hm <- purrr::map(liwc_vars, function(var) {  
+  feols(as.formula(paste0(var, " ~ review_period_dummy:proximity | business_id + review_half_months")),        
+        data = aggregated_LIWC_reviews_4hm) })
+table(aggregated_LIWC_reviews_4hm$proximity, aggregated_LIWC_reviews_4hm$review_period)
+names(models_fe_4hm) <- liwc_vars
+
+# Tidy and extract significant interaction terms
+results_fe_4hm <- purrr::map2(models_fe_4hm, liwc_vars, function(mod, name) {
+  broom::tidy(mod) %>% dplyr::mutate(dependent = name)
+}) %>%
+  dplyr::bind_rows()
+interaction_results_fe_4hm <- dplyr::filter(results_fe_4hm, grepl("review_period_dummy.*:proximity", term))
+
+# Print results
+print(interaction_results_fe_4hm)
+write.csv(interaction_results_fe_4hm, "liwc_fixed_effects_results_4hm.csv", row.names = FALSE)
+
+# Filter significant results (p < 0.05)
+significant_vars_fe_4hm <- interaction_results_fe_4hm %>%
+  dplyr::filter(p.value < 0.05) %>%
+  dplyr::select(dependent, term, estimate, std.error, p.value)
+write.csv(significant_vars_fe_4hm, "liwc_fixed_effects_significant_results_4hm.csv", row.names = FALSE)
+
+# Generate a summary table for the interaction results with all the statistic characteristics
+interaction_results_fe_4hm %>%
+  kable("latex", booktabs = TRUE, digits = 4,
+        col.names = c("Interaction Term", "Estimate", "Std. Error", "t Statistic", "p-value", "LIWC Variable")) %>%
+  kable_styling(latex_options = c("hold_position", "scale_down"))
 
 
 
