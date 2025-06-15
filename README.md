@@ -1,2 +1,2 @@
 # Code_Data_Thesis_Chen_597628
-This repository includes all the coding and data used and generated for the thesis.
+This repository contains all the coding, data, graphs, and tables used and generated for the thesis.
